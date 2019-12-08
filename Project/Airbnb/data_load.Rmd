@@ -1,0 +1,75 @@
+---
+title: "Untitled"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse,stringr,cluster)
+```
+
+```{r}
+files = list.files(pattern = ".csv")
+files = files[which(str_detect(files,pattern = "2017"))]
+c = setNames(files,paste0("city",1:length(files)))
+list2env(lapply(c,read.csv),envir = .GlobalEnv)
+
+
+v.l = intersect(names(city5),names(city4))
+for(i in 1:length(files)){
+  assign(x = paste0("city", i),value = select(get(paste0("city", i)),v.l))
+}
+city = city1
+for(i in 2:length(files)){
+  city = rbind(city,get(paste0("city", i)))
+}
+```
+
+```{r}
+# filter observations with more than 100 reviews 
+city.re = city %>% filter(reviews > 100)
+
+
+# # count the observations in each neighborhood
+# count.nerbor = city.re %>% count(neighborhood) %>% arrange(desc(n))
+# # extract neighborhood with more than 30 observations
+# count.nerbor = count.nerbor %>% filter(n>30)
+# city.re = city.re[which(city.re$neighborhood %in% count.nerbor$neighborhood),]
+```
+
+```{r}
+# export dataset to CSV file
+write.csv(city.re,"data_final.csv")
+```
+
+```{r}
+da = city.re %>% dplyr::select(latitude,longitude)
+
+m=20 # max number of clusters
+n=10  # number of repeats experiments for each k value
+tot = matrix(nrow = m,ncol  = n)
+f = matrix(nrow = m,ncol  = n)
+# Calculate the total withingroup errors
+for(i in 1:m){
+  for(j in 1:n){
+    cl = kmeans(x = da,centers = i)
+    f[i,j] = cl$betweenss/cl$tot.withinss
+    tot[i,j] = cl$tot.withinss
+  }
+}
+# calculate average total within-group error
+tot = tot %>% apply(MARGIN = 1,mean)
+f = f %>% apply(MARGIN = 1,mean)
+# plot errors
+tot = data.frame(cbind(tot,seq(1,m,1)))
+f = data.frame(cbind(f,seq(1,m,1)))
+ggplot(tot) + geom_line(aes(y=tot,x = V2),size = 2) + 
+  scale_x_continuous("Number of Cluster",breaks = seq(1,m,1)) + 
+  ylab("SSE")
+ggplot(f) + geom_line(aes(y=f,x = V2),size = 2) + 
+  scale_x_continuous("Number of Cluster",breaks = seq(1,m,1)) + 
+  ylab("SSE")
+
+cl = kmeans(x = da,centers = 10)
+city.re = city.re %>% mutate(cluster = cl$cluster)
+```

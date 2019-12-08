@@ -1,0 +1,279 @@
+---
+title: "MA678 Modeling Midterm Project"
+author: "Yiping Jiang"
+date: "12/6/2019"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 2
+header-includes:
+  - \usepackage{float}
+urlcolor: blue
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse, ggrepel, ggforce, tidyr, plyr, dplyr, tm, SnowballC, wordcloud, RColorBrewer, ggmap, lme4, Matrix, knitr, sjPlot, gridExtra, scales, arm, dotwhisker, broom, corrplot, PerformanceAnalytics)
+```
+
+\newpage
+
+# 1. Introduction  
+
+## 1.1 Overview
+
+\qquad Airbnb is the leading and rapidly growing alternative to the traditional hotel networks. It collects a large amount of data about their hosts and properties including detailed tourists reviews, and it is changing people's habits for accommodation when traveling. And there rises an problem about how customers can find the cost-effective accommodation and how owners set the the proper price for their properties.  
+
+\qquad To address this problem, I set Boston as example to analyze what factors have influences on the price of the airbnb accommodation. This report are consisted of the parts of **introduction, data preparation, Exploratory Data Analysis, modeling,  discussion and appendix**, in which I mainly utlized multilevel models to conduct the regression modeling. 
+
+## 1.2 Outline  
+
+\qquad In this report, I will mainly investiage the following questions:  
+
++ What are the main distinctions of Airbnb superhosts from ordinary hosts?  
++ What are the main factors that influence Airbnb daily renting price?  
++ How well can one predict the Airbnb daily renting price based on the data from different neighborhoods?  
+
+\qquad To answer these questions, I have downloaded the data from Airbnb host listings and tourists reviews. From the Boston data set I chose, I will clean the data first, and then do exploratory data analysis with visualization, next analyze the data through modeling and discuss the results with interpretations.  
+
+\newpage  
+
+# 2. Data Preparation   
+
+## 2.1 Data Source  
+
+\qquad The data that I used was collected from the public Airbnb web site http://tomslee.net/airbnb-data-collection-get-the-data, and there were 4705 listings in the "Boston" dataset up to July 10, 2017, which contains several variables and here are their descriptions:  
+
++ room_id: A unique number identifying an Airbnb listing.  
+
++ host_id: A unique number identifying an Airbnb host.  
+
++ room_type: One of “Entire home/apt”, “Private room”, or “Shared room”.  
+
++ borough: A subregion of the city or search area for which the survey is carried out. The borough is taken from a shapefile of the city that is obtained independently of the Airbnb web site. For some cities, there is no borough information; for others the borough may be a number.  
+
++ neighborhood: As with borough: a subregion of the city or search area for which the survey is carried out. For cities that have both, a neighbourhood is smaller than a borough. For some cities there is no neighbourhood information.  
+
++ reviews: The number of reviews that a listing has received. Airbnb has said that 70% of visits end up with a review, so the number of reviews can be used to estimate the number of visits. Note that such an estimate will not be reliable for an individual listing (especially as reviews occasionally vanish from the site), but over a city as a whole it should be a useful metric of traffic.  
+
++ overall_satisfaction: The average rating (out of five) that the listing has received from those visitors who left a review. 
+
++ accommodates: The number of guests a listing can accommodate.  
+
++ bedrooms: The number of bedrooms a listing offers.  
+
++ price: The price (in $US) for a night stay. In early surveys, there may be some values that were recorded by month.  
+
++ minstay: The minimum stay for a visit, as posted by the host.  
+
++ latitude and longitude: The latitude and longitude of the listing as posted on the Airbnb site.  
+
++ last_modified: the date and time that the values were read from the Airbnb web site.  
+
+## 2.2 Data Cleaning
+
+\qquad Loading and checking the information of the data, I plan to use visualization to show the distribution of the residences' features, from where I will then choose proper models to conduct analysis. The main steps of data preparation and clean process are:
+
++ Extract hosts with more than 100 reviews;  
+
++ Reorganize some variables;  
+
++ Delete observations with missing values.  
+
+## 2.3 Praparing the data
+
+```{r}
+# read data_final.csv
+bos <- read.csv("/Users/sebas_jiang/Desktop/MA678_Modeling/Project/Air\ Bnb/Air\ Bnb/data_final.csv")
+
+# add one column to record the price per person
+bos$pricepp <- bos$price/bos$accommodates 
+bos %>%
+  filter(!is.na(host_id)) -> bos
+```
+
+\qquad So far the dataset has `r nrow(bos)` rows and `r ncol(bos)` columns.
+
+### Data Structure
+
+```{r}
+str(bos)
+```
+
+\qquad Now from the output we have variables such as **room_type, neighborhood** that have different levels, so I then put these categorical variables into my model. Next, for numerical variables such as **reviews, overall_satisfaction, accommodates, bedrooms**, which include discrete data rather than consecutive data, so they can also be put into my model as categorical variables.  
+
+### Data overview  
+
+```{r, echo = FALSE}
+summary(bos)
+```
+
+\qquad From the summary we can see these variables may have correlation with the price of each listing, such as **room_type, neighborhood, reviews, overall_satisfaction, accommodates, bedrooms**, from which I can explore the correlation of variables mainly with the price in the exploratory data analysis by choosing proper model to do analyses.  
+
+\newpage
+
+# 3. Exploratory Data Analysis  
+
+## 3.1 Correlation plot  
+
+```{r}
+# create the subset
+set.seed(2019)
+bos %>%
+  dplyr::select(price, room_type, reviews, overall_satisfaction, 
+                neighborhood, accommodates, bedrooms) %>%
+  na.omit(accommodates, bedrooms, room_type, neighborhood, borough, reviews) %>%
+  sample_n(0.1 * nrow(bos))-> bos.m
+bos.m %>%
+  dplyr::select(reviews, overall_satisfaction, accommodates, bedrooms, price) -> cor.p
+
+library("PerformanceAnalytics")
+chart.Correlation(cor.p, histogram = TRUE, pch = 20)
+```
+
+\qquad From the correlation plot, we have distributions of these five variables on the diagonal, and we can see the bivariate scatter plots with fitted lines in the lower left triangular area that there are correlations between each of the first four variables and the price (accomodates and bedrooms in particular). Next from the numbers on the upper right triangular area we can see correlations and significant level among these four variables and price are high, so I consider to put them into my model to predict the accommodation price.
+
+## 3.2 Boxplot of neighborhood and price
+```{r}
+ggplot(bos, aes(x = reorder(neighborhood, price, median), 
+                y = price, group = neighborhood, colour = neighborhood)) +
+  geom_boxplot() +
+  ylim(0,500) +
+  theme(text=element_text(size = 8),legend.position = "none") +
+  labs(title = "Airbnb price in Boston by neighborhood", x = "neighborhood") +
+  coord_flip()
+```
+
+\qquad From the boxplot we can see that the difference of the price median among all neighborhoods are significant, so I consider to use multilevel model. Downtown has the highest median price than other neighborhoods and Roslindale has the lowest median price. As a result, we can infer from the plot that *neighborhood* is one of the factors that influences the price.  
+
+\newpage
+
+# 4. Modeling  
+
+## 4.1 Multilevel Model  
+
+### Model 1
+
+\qquad Regress **price** on **accommodates and bedrooms** and treat all other intercepts as random.  
+
+```{r, warning = FALSE}
+fit.1 <- lmer(data = bos.m, log(price) ~ accommodates + 
+                (1 | room_type) + (1 | neighborhood), REML = FALSE)
+display(fit.1)
+```
+
+### Model 2  
+
+\qquad Based on Model 1, we add a between-group correlation between accommodates and neighborhood.  
+
+```{r, warning = FALSE}
+fit.2 <- lmer(data = bos.m, log(price) ~ accommodates + bedrooms + 
+                (1 | room_type) + (1 + bedrooms | neighborhood), REML = FALSE)
+display(fit.2)
+```
+
+### Model 3  
+
+\qquad Then try regressing price on accomodates, room_type, reviews and bedrooms with remaining one between-group and other variables as random.  
+
+```{r, warning = FALSE}
+fit.3 <- lmer(data = bos.m, log(price) ~ accommodates + reviews + room_type + 
+                bedrooms + (1 + accommodates | neighborhood), REML = FALSE)
+display(fit.3)
+ranef(fit.3)
+```
+
+## 4.2 Model Choice  
+
+### Coefficient plot
+
+```{r, message = FALSE, warning = FALSE}
+dwplot(list(fit.1, fit.2, fit.3), show_intercept = TRUE)
+```
+
+\qquad From the above plot, we cannot tell whether model 2 or 3 is better, because although Model 3 has more points than Model 2, it might because Model 3 has more observations. For Model 2, although it has less points but it shows more precision than Model 3.
+
+### ANOVA
+
+```{r, message = FALSE, warning = FALSE}
+anova(fit.1, fit.2, fit.3) 
+```
+
+\qquad From ANOVA, comparing among fit 1, 2 and 3, we can see both the AIC and BIC of fit 3 are smaller than Fit 1 and 2, and through fit 1 to 3, the deviance is decreasing, and the p-value is 2.817e-05, which is significant enough. As a result, we decide to use fit 3 and add the those variables to the model, which does lead to a significantly improved fit.  
+
+\qquad Therefore, the final model choosen is model 3, a multilevel model varying both intercepts and slopes.
+$$log(y_{i})\sim\ N(\alpha_{j[i]}+\beta_{j[i]}x_{i},\ \sigma_{y}^2),\ for\ i=1,\dots,n$$
+
+## 4.3 Interpretation  
+
+\qquad This multilevel model can be explained as below. Taking reserving airbnb accommodation in Allston as example:   
+
+$$log(Y_{price}) =\\
+(4.97 - 0.23) + (0.01 + 0.05)X_{accommodates}\\
++ 0 * X_{reviews} + 0.12X_{bedrooms} - 0.55X_{privateroom}\\$$
+$$= 4.74 + 0.06X_{accommodates} + 0 * X_{reviews}\\
++ 0.12X_{bedrooms} - 0.55X_{privateroom}$$
+
+\qquad Taking a accommodation with the accommodate is 0, the number of bedrooms is 0, the reviews are 0 and the room type is apartment, the price gives $e^{4.74}$ which is 114.43 (though the accommodate cannot be 0).  
+
+\qquad With every one person increased in accommodate and other variables ramain the same, the price will increase by $e^{0.06}$ which is 1.06; with every one unit increased in the number of reviews and controlling others, the price will not change; with every one unit increased in the number of bedrooms and others do not change, the price will increase by $e^{0.12}$ which is 1.13. And if the room type is private room while controling other variables, the price will decrease by $e^{-0.55}$ which is 0.57.  
+
+## 4.4 Model Check  
+
+### Diagnostic plots  
+
+```{r, warning = FALSE}
+library(sjPlot)
+plot_model(fit.3, type = "diag", show.values = TRUE, value.offset = 0.3)
+```  
+
+\qquad From above diagnostic plots, in plot [1], observing the non-normality of residuals and outliers, we can see the dots are mainly plotted along the line; in plot [2], the random effect shows normal distribution; in plot [3], the blue line closely comply normal distribution, and the pink reresents the normal residual. As we can see that these two mainly accord with each other; in plot [4], the homoscedasticity shows the dispersion degree is even, and there is no heteroscedasticity.  
+
+# 5. Discussion  
+
+## 5.1 Summary  
+
+\qquad By predicting the price of accommodation in airbnb, people who are reserving accommodations can take it as a reference. In this model, the number of accommodates and bedrooms are the significant factors that influence Airbnb daily renting price. While except the room type, reviews, overall satisfication, accommodates, and bedrooms, there are other variables can also affect the price while predicting, which explains why the model I chose is not that good.
+
+## 5.2 Limitation  
+
+\qquad The dataset lacks some necessary features of the accommodation to get the model with better fitting, and the errors are more distributed around the higher prices of the accommodation. Therefore I can clarify all the accommodation based their prices to get a better fitting model.
+
+## 5.3 Future Direction  
+
+\qquad In the future I will try using Zillow API to get more information of the accommodation to bring in more variables to better fit the model with more ideal results.  
+
+# Acknowledgments
+I would like to thank my classmate, Harry Cao, for answering questions and providing suggestions to help me better understand this project.  
+
+# 6. Appendix  
+
+### Random effect plot  
+
+```{r, warning = FALSE}
+# Check random effect coeficients and the significance.
+plot_model(fit.3, type = "re", show.values = TRUE, value.offset = 0.3)
+```
+
+### Diagram of reviews  
+
+```{r, warning = FALSE}
+ggplot(data = bos, aes(x = as.factor(overall_satisfaction), 
+                       col = overall_satisfaction, 
+                       fill = overall_satisfaction)) +
+  geom_histogram(stat = "count")
+```
+
+### Mean prices of each neighborhood in Boston
+
+```{r}
+#Calculate the mean of home values
+MHV <- aggregate(price ~ neighborhood, bos, mean)
+# Calculate the mean of home values
+MHV <- aggregate(price ~ neighborhood, bos, mean)
+ggplot(data = MHV, aes(x = neighborhood, y = price)) +
+  geom_line(col = "orange", size = 1.5) +
+  geom_point(col = "red") +
+  labs(y = "Price", title = "Mean prices of each neighborhood in Boston") +
+  theme_minimal()
+```
